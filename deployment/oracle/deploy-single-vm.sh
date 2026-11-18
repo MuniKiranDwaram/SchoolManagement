@@ -8,6 +8,8 @@ APP_REPO_URL="${APP_REPO_URL:-https://github.com/MuniKiranDwaram/SchoolManagemen
 APP_REPO_DIR="${APP_REPO_DIR:-/home/ubuntu/SchoolManagement}"
 BACKEND_DIR="/var/www/schoolmanagement-backend"
 FRONTEND_DIR="/var/www/schoolmanagement-frontend"
+AUTH_FILE="/etc/schoolmanagement.env"
+
 PG_USER="${PG_USER:-schooladmin}"
 PG_PASSWORD="${PG_PASSWORD:-StrongPassword123!}"
 PG_DB="${PG_DB:-schoolmanagement}"
@@ -16,10 +18,11 @@ PG_PORT="5432"
 JWT_ISSUER="${JWT_ISSUER:-SchoolManagementApp}"
 JWT_AUDIENCE="${JWT_AUDIENCE:-SchoolManagementAppUsers}"
 CERTBOT_EMAIL="${CERTBOT_EMAIL:-admin@${APP_DOMAIN}}"
-AUTH_FILE="/etc/schoolmanagement.env"
 
-log() { printf '\n[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
-fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+log()  { printf '\n[%s] INFO  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
+warn() { printf '\n[%s] WARN  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2; }
+error() { printf '\n[%s] ERROR %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2; }
+fail() { error "$*"; exit 1; }
 
 log "=================================================="
 log "Deploying ${APP_NAME}"
@@ -35,10 +38,34 @@ if ! command -v sudo >/dev/null 2>&1; then
   fail "sudo is required."
 fi
 
-export DEBIAN_FRONTEND=noninteractive
-sudo apt-get update -qq
-sudo apt-get install -y -qq wget curl unzip ca-certificates gnupg lsb-release nginx git openssl nodejs npm postgresql-client >/dev/null
+# Suppress needrestart prompts before any package installation.
+sudo mkdir -p /etc/needrestart/conf.d
+printf '%s\n' '$nrconf{restart} = "a";' | sudo tee /etc/needrestart/conf.d/99-auto.conf >/dev/null
+printf '%s\n' '$nrconf{kernelhints} = 0;' | sudo tee -a /etc/needrestart/conf.d/99-auto.conf >/dev/null
 
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+sudo apt-get update -qq
+sudo apt-get install -y -qq \
+  wget curl unzip ca-certificates gnupg lsb-release nginx git openssl nodejs npm postgresql-client \
+  >/dev/null
+
+# Preserve existing secrets before PostgreSQL setup or package reruns.
+if sudo test -f "${AUTH_FILE}"; then
+  log "Preserving existing production secrets from ${AUTH_FILE}."
+  EXISTING_DB_PASSWORD="$(sudo sed -n 's/^DB_PASSWORD=//p' "${AUTH_FILE}" | tail -n 1)"
+  EXISTING_JWT_KEY="$(sudo sed -n 's/^JWT_KEY=//p' "${AUTH_FILE}" | tail -n 1)"
+  EXISTING_JWT_ISSUER="$(sudo sed -n 's/^JWT_ISSUER=//p' "${AUTH_FILE}" | tail -n 1)"
+  EXISTING_JWT_AUDIENCE="$(sudo sed -n 's/^JWT_AUDIENCE=//p' "${AUTH_FILE}" | tail -n 1)"
+  PG_PASSWORD="${EXISTING_DB_PASSWORD:-${PG_PASSWORD}}"
+  JWT_KEY="${EXISTING_JWT_KEY:-${JWT_KEY:-$(openssl rand -hex 32)}}"
+  JWT_ISSUER="${EXISTING_JWT_ISSUER:-${JWT_ISSUER}}"
+  JWT_AUDIENCE="${EXISTING_JWT_AUDIENCE:-${JWT_AUDIENCE}}"
+else
+  JWT_KEY="${JWT_KEY:-$(openssl rand -hex 32)}"
+fi
+
+# Install or reuse .NET 8.
 export DOTNET_ROOT="${DOTNET_ROOT:-$HOME/.dotnet}"
 export PATH="${DOTNET_ROOT}:${HOME}/.dotnet/tools:${PATH}"
 
@@ -49,28 +76,41 @@ elif [[ -x "${HOME}/.dotnet/dotnet" ]]; then
   DOTNET_CMD="${HOME}/.dotnet/dotnet"
   log ".NET is already installed under ${HOME}/.dotnet"
 else
-  log "Installing .NET 8..."
+  log "Installing .NET 8."
   wget -q https://dot.net/v1/dotnet-install.sh -O /tmp/dotnet-install.sh
   bash /tmp/dotnet-install.sh --channel 8.0
   DOTNET_CMD="${DOTNET_ROOT}/dotnet"
 fi
 
 [[ -x "${DOTNET_CMD}" ]] || fail "dotnet is unavailable after installation."
-log ".NET version: $(${DOTNET_CMD} --version)"
 
-if [[ -f /etc/apt/trusted.gpg.d/postgresql.asc ]]; then
-  log "PostgreSQL APT repository key already exists."
-else
-  log "Installing PostgreSQL APT repository key..."
+# PostgreSQL repository key: recognize both old and new names and never prompt.
+PG_KEY_FOUND=false
+for key_file in \
+  /etc/apt/trusted.gpg.d/postgresql.asc \
+  /etc/apt/trusted.gpg.d/postgresql.gpg
+do
+  if [[ -s "${key_file}" ]]; then
+    PG_KEY_FOUND=true
+    PG_KEY_FILE="${key_file}"
+    break
+  fi
+done
+
+if [[ "${PG_KEY_FOUND}" != true ]]; then
+  log "Installing PostgreSQL APT repository key."
   curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
     | sudo gpg --batch --yes --dearmor -o /tmp/postgresql.asc
   sudo install -o root -g root -m 0644 /tmp/postgresql.asc /etc/apt/trusted.gpg.d/postgresql.asc
-  rm -f /tmp/postgresql.asc
+  PG_KEY_FILE=/etc/apt/trusted.gpg.d/postgresql.asc
 fi
 
-PG_REPO_LINE="deb [signed-by=/etc/apt/trusted.gpg.d/postgresql.asc] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main"
-if ! grep -Fqx "${PG_REPO_LINE}" /etc/apt/sources.list.d/pgdg.list 2>/dev/null; then
-  log "Creating PostgreSQL APT repository entry..."
+sudo rm -f /tmp/postgresql.asc 2>/dev/null || true
+log "Using PostgreSQL key: ${PG_KEY_FILE}"
+
+PG_REPO_LINE="deb [signed-by=${PG_KEY_FILE}] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main"
+if ! sudo grep -Fqx "${PG_REPO_LINE}" /etc/apt/sources.list.d/pgdg.list 2>/dev/null; then
+  log "Creating PostgreSQL APT repository entry."
   printf '%s\n' "${PG_REPO_LINE}" | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
 fi
 
@@ -81,53 +121,40 @@ sudo systemctl start postgresql
 
 if sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='${PG_USER}'" | grep -qx 1; then
   log "PostgreSQL role '${PG_USER}' already exists."
+  sudo -u postgres psql -v ON_ERROR_STOP=1 \
+    -c "ALTER ROLE \"${PG_USER}\" WITH LOGIN PASSWORD '${PG_PASSWORD}';"
 else
-  log "Creating PostgreSQL role '${PG_USER}'..."
-  sudo -u postgres psql -v ON_ERROR_STOP=1 -c "CREATE ROLE \"${PG_USER}\" LOGIN PASSWORD '${PG_PASSWORD}';"
+  log "Creating PostgreSQL role '${PG_USER}'."
+  sudo -u postgres psql -v ON_ERROR_STOP=1 \
+    -c "CREATE ROLE \"${PG_USER}\" LOGIN PASSWORD '${PG_PASSWORD}';"
 fi
 
 if sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${PG_DB}'" | grep -qx 1; then
   log "PostgreSQL database '${PG_DB}' already exists."
 else
-  log "Creating PostgreSQL database '${PG_DB}'..."
+  log "Creating PostgreSQL database '${PG_DB}'."
   sudo -u postgres createdb --owner="${PG_USER}" "${PG_DB}"
 fi
 
-if [[ -f "${AUTH_FILE}" ]]; then
-  log "Preserving existing production secrets from ${AUTH_FILE}."
-  EXISTING_DB_PASSWORD="$(sudo sed -n 's/^DB_PASSWORD=//p' "${AUTH_FILE}" | tail -n 1)"
-  EXISTING_JWT_KEY="$(sudo sed -n 's/^JWT_KEY=//p' "${AUTH_FILE}" | tail -n 1)"
-  EXISTING_JWT_ISSUER="$(sudo sed -n 's/^JWT_ISSUER=//p' "${AUTH_FILE}" | tail -n 1)"
-  EXISTING_JWT_AUDIENCE="$(sudo sed -n 's/^JWT_AUDIENCE=//p' "${AUTH_FILE}" | tail -n 1)"
-  PG_PASSWORD="${EXISTING_DB_PASSWORD:-${PG_PASSWORD}}"
-  JWT_KEY="${JWT_KEY:-${EXISTING_JWT_KEY:-$(openssl rand -hex 32)}}"
-  JWT_ISSUER="${EXISTING_JWT_ISSUER:-${JWT_ISSUER}}"
-  JWT_AUDIENCE="${EXISTING_JWT_AUDIENCE:-${JWT_AUDIENCE}}"
-else
-  JWT_KEY="${JWT_KEY:-$(openssl rand -hex 32)}"
-fi
-
+# Use or clone the repository.
 if [[ -d "${APP_REPO_DIR}" ]]; then
   if [[ -d "${APP_REPO_DIR}/.git" ]]; then
-    log "Repository already exists; updating it."
+    log "Repository already exists; pulling origin main."
     git -C "${APP_REPO_DIR}" remote set-url origin "${APP_REPO_URL}"
     git -C "${APP_REPO_DIR}" fetch --prune origin
-    if [[ -z "$(git -C "${APP_REPO_DIR}" status --porcelain)" ]]; then
-      git -C "${APP_REPO_DIR}" pull --ff-only
-    else
-      log "Repository has local changes; skipping git pull."
-    fi
+    git -C "${APP_REPO_DIR}" pull origin main
   else
     fail "${APP_REPO_DIR} exists but is not a Git repository."
   fi
 else
-  log "Cloning repository..."
+  log "Cloning repository."
   git clone "${APP_REPO_URL}" "${APP_REPO_DIR}"
 fi
 
 cd "${APP_REPO_DIR}"
 
-log "Writing ${AUTH_FILE}..."
+# Create the root-only environment file atomically.
+log "Writing ${AUTH_FILE}."
 {
   printf 'POSTGRES_CONNECTION_STRING="Host=%s;Port=%s;Database=%s;Username=%s;Password=%s;"\n' "${PG_HOST}" "${PG_PORT}" "${PG_DB}" "${PG_USER}" "${PG_PASSWORD}"
   printf 'DB_HOST=%s\n' "${PG_HOST}"
@@ -140,14 +167,17 @@ log "Writing ${AUTH_FILE}..."
   printf 'JWT_AUDIENCE=%s\n' "${JWT_AUDIENCE}"
   printf 'FRONTEND_ALLOWED_ORIGIN=%s\n' "${APP_BASE_URL}"
 } | sudo tee "${AUTH_FILE}.tmp" >/dev/null
-sudo install -o root -g root -m 0600 "${AUTH_FILE}.tmp" "${AUTH_FILE}"
-sudo rm -f "${AUTH_FILE}.tmp"
+sudo chown root:root "${AUTH_FILE}.tmp"
+sudo chmod 0600 "${AUTH_FILE}.tmp"
+sudo mv -f "${AUTH_FILE}.tmp" "${AUTH_FILE}"
+sudo chown root:root "${AUTH_FILE}"
+sudo chmod 0600 "${AUTH_FILE}"
 
-log "Publishing backend..."
+log "Publishing backend."
 cd "${APP_REPO_DIR}/Backend/Backend"
 ${DOTNET_CMD} publish -c Release -o "${BACKEND_DIR}"
 
-log "Building frontend..."
+log "Building frontend."
 cd "${APP_REPO_DIR}/Frontend"
 printf 'VITE_API_BASE_URL=%s\n' "${APP_BASE_URL}" | tee .env.production >/dev/null
 npm install --no-audit --no-fund
@@ -157,7 +187,7 @@ sudo mkdir -p "${FRONTEND_DIR}"
 sudo find "${FRONTEND_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 sudo cp -a dist/. "${FRONTEND_DIR}/"
 
-log "Installing backend systemd service..."
+log "Installing backend systemd service."
 cat <<EOF | sudo tee /etc/systemd/system/schoolmanagement-backend.service >/dev/null
 [Unit]
 Description=School Management Backend
@@ -184,7 +214,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable schoolmanagement-backend.service >/dev/null
 sudo systemctl restart schoolmanagement-backend.service
 
-log "Installing Nginx configuration..."
+log "Installing Nginx configuration."
 cat <<EOF | sudo tee /etc/nginx/conf.d/schoolmanagement.conf >/dev/null
 server {
     listen 80;
@@ -222,7 +252,7 @@ EOF
 sudo nginx -t
 sudo systemctl reload nginx
 
-log "Waiting for backend health endpoint..."
+log "Waiting for backend health endpoint."
 HEALTH_OK=false
 for attempt in {1..30}; do
   if curl -fsS http://127.0.0.1:5183/health >/dev/null 2>&1; then
@@ -239,7 +269,7 @@ if [[ "${HEALTH_OK}" != true ]]; then
 fi
 
 if ! command -v certbot >/dev/null 2>&1; then
-  log "Installing Certbot..."
+  log "Installing Certbot."
   sudo apt-get install -y -qq certbot python3-certbot-nginx >/dev/null
 fi
 
