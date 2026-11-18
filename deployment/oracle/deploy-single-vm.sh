@@ -47,8 +47,38 @@ export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
 sudo apt-get update -qq
 sudo apt-get install -y -qq \
-  wget curl unzip ca-certificates gnupg lsb-release nginx git openssl nodejs npm postgresql-client \
+  wget curl unzip ca-certificates gnupg lsb-release nginx git openssl postgresql-client \
   >/dev/null
+
+# Replace unsupported Ubuntu Node.js packages with Node.js 20 LTS.
+log "Ensuring Node.js 20 LTS is installed."
+sudo apt-get purge -y -qq nodejs npm libnode72 2>/dev/null || true
+sudo apt-get autoremove -y -qq >/dev/null || true
+sudo apt-get update -qq
+
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y -qq nodejs >/dev/null
+
+NODE_VERSION="$(node -v 2>/dev/null || true)"
+NPM_VERSION="$(npm -v 2>/dev/null || true)"
+NODE_MAJOR="$(printf '%s' "${NODE_VERSION}" | sed -E 's/^v([0-9]+).*/\1/')"
+
+if [[ -z "${NODE_MAJOR}" || ! "${NODE_MAJOR}" =~ ^[0-9]+$ ]]; then
+  fail "Node.js is not installed or node -v did not return a valid version."
+fi
+
+if (( NODE_MAJOR < 20)); then
+  fail "Unsupported Node.js ${NODE_VERSION}. Node.js 20 or newer is required, and Node.js 20 LTS was requested."
+fi
+
+if [[ -z "${NPM_VERSION}" ]]; then
+  fail "npm is not available after Node.js installation."
+fi
+
+NODE_VERSION="$(node -v 2>/dev/null || true)"
+NPM_VERSION="$(npm -v 2>/dev/null || true)"
+log "Node.js version: ${NODE_VERSION}"
+log "npm version: ${NPM_VERSION}"
 
 # Preserve existing secrets before PostgreSQL setup or package reruns.
 if sudo test -f "${AUTH_FILE}"; then
@@ -179,6 +209,20 @@ ${DOTNET_CMD} publish -c Release -o "${BACKEND_DIR}"
 
 log "Building frontend."
 cd "${APP_REPO_DIR}/Frontend"
+
+NODE_VERSION="$(node -v 2>/dev/null || true)"
+NPM_VERSION="$(npm -v 2>/dev/null || true)"
+NODE_MAJOR="$(printf '%s' "${NODE_VERSION}" | sed -E 's/^v([0-9]+).*/\1/')"
+
+if [[ -z "${NODE_MAJOR}" || ! "${NODE_MAJOR}" =~ ^[0-9]+$ ]]; then
+  fail "Cannot build frontend: node -v did not return a valid version."
+fi
+
+if (( NODE_MAJOR < 20 )); then
+  fail "Cannot build frontend with unsupported Node.js ${NODE_VERSION}. Node.js 20 or newer is required."
+fi
+
+log "Using Node.js ${NODE_VERSION} and npm ${NPM_VERSION} for frontend build."
 printf 'VITE_API_BASE_URL=%s\n' "${APP_BASE_URL}" | tee .env.production >/dev/null
 npm install --no-audit --no-fund
 npm run build
