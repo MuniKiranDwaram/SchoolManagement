@@ -1,0 +1,32 @@
+#Teacher-view div div{
+    border: 1px solid gray;
+    padding: 1rem;
+    position: relative;
+    display: flex ;
+    flex-direction: row;
+    width: 100%;
+}
+
+#Teacher-view div div img{
+  position: absolute;
+  right: 0.5rem;
+  display:none;
+  cursor: pointer;
+}
+
+#Teacher-view div div:hover img{
+  display: block;
+}
+
+
+
+/* #value:hover::after {
+  content: url('../../../assets/Images/edit.png');
+  margin-left: 0.5rem;
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  position: absolute;
+  right: 2rem;
+  cursor: pointer;
+} */

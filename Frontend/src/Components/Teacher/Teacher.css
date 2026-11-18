@@ -1,0 +1,15 @@
+#footer-buttons button{
+    background-color: var(--color-btn-footer);
+    padding-inline: 1rem;
+    padding-block: 0.3rem;
+    text-align: center;
+    border-radius: 0.3rem;
+    cursor: pointer;
+    color:white;
+    transition: all;
+    max-height: 2rem;
+}
+
+#footer-buttons button:active{
+    transform: scale(0.95);
+}

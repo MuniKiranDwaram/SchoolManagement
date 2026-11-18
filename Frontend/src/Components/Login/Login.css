@@ -1,0 +1,8 @@
+#signup-details input{
+    border: 1px solid gray;
+    border-radius: 3px;
+    color: gray;
+    padding: 3px;
+    margin: 5px;
+    width: 100%;
+}

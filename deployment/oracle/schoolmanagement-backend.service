@@ -1,0 +1,19 @@
+[Unit]
+Description=School Management Backend
+After=network.target
+
+[Service]
+WorkingDirectory=/var/www/schoolmanagement-backend
+ExecStart=/home/ubuntu/.dotnet/dotnet /var/www/schoolmanagement-backend/Backend.dll
+Restart=always
+RestartSec=10
+KillSignal=SIGINT
+SyslogIdentifier=schoolmanagement-backend
+EnvironmentFile=/etc/schoolmanagement.env
+User=ubuntu
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=DOTNET_ROOT=/home/ubuntu/.dotnet
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/home/ubuntu/.dotnet:/home/ubuntu/.dotnet/tools
+
+[Install]
+WantedBy=multi-user.target

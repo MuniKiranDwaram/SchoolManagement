@@ -1,0 +1,38 @@
+# Environment secrets and deployment credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+
+# Backend build outputs and caches
+**/bin/
+**/obj/
+**/publish/
+**/.vs/
+
+# Visual Studio / IDE files
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Frontend dependencies and generated output
+node_modules/
+dist/
+dist-ssr/
+*.tsbuildinfo
+
+# Logs and local runtime data
+*.log
+logs/
+coverage/
+TestResults/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
