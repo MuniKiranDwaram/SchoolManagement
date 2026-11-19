@@ -9,6 +9,20 @@ const getRuntimeEnv = () => {
 };
 
 export const getApiBaseUrl = (runtimeEnv = getRuntimeEnv()) => {
+    if (typeof window !== 'undefined' && window.location?.origin) {
+        const hostname = window.location.hostname;
+        const isLocalBrowser = hostname === 'localhost' || hostname === '127.0.0.1';
+
+        if (isLocalBrowser) {
+            const configuredBaseUrl = (runtimeEnv?.VITE_API_BASE_URL ?? '').trim();
+            return configuredBaseUrl || 'http://localhost:5183';
+        }
+
+        // Production should use the same origin as the page (IP or domain).
+        // Nginx proxies /api and /health to the ASP.NET Core backend.
+        return window.location.origin;
+    }
+
     const configuredBaseUrl = (runtimeEnv?.VITE_API_BASE_URL ?? '').trim();
     return configuredBaseUrl || 'http://localhost:5183';
 };
